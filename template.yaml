@@ -16,6 +16,7 @@ Metadata:
       - Label:
           default: "Advanced Configuration"
         Parameters:
+          - GoogleSAEmail
           - SyncMethod
           - GoogleUserMatch
           - GoogleGroupMatch
@@ -73,6 +74,11 @@ Parameters:
     Type: String
     Description: Google Admin email
     NoEcho: true
+  GoogleSAEmail:
+    Type: String
+    Description: Google service account email used to impersonate Google Admin. Providing a value enables Workload Identity Federation
+    Default: ""
+    NoEcho: true
   SCIMEndpointUrl:
     Type: String
     Description: AWS SSO SCIM Endpoint Url
@@ -122,9 +128,6 @@ Parameters:
       - groups
       - users_groups
 
-
-
-
 Resources:
   SSOSyncFunction:
     Type: AWS::Serverless::Function
@@ -140,6 +143,7 @@ Resources:
           SSOSYNC_LOG_FORMAT: !Ref LogFormat
           SSOSYNC_GOOGLE_CREDENTIALS: !Ref AWSGoogleCredentialsSecret
           SSOSYNC_GOOGLE_ADMIN: !Ref AWSGoogleAdminEmail
+          SSOSYNC_GOOGLE_SA_EMAIL: !Ref AWSGoogleSAEmail
           SSOSYNC_SCIM_ENDPOINT: !Ref AWSSCIMEndpointSecret
           SSOSYNC_SCIM_ACCESS_TOKEN: !Ref AWSSCIMAccessTokenSecret
           SSOSYNC_REGION: !Ref AWSRegionSecret
@@ -150,36 +154,7 @@ Resources:
           SSOSYNC_IGNORE_GROUPS: !Ref IgnoreGroups
           SSOSYNC_IGNORE_USERS: !Ref IgnoreUsers
           SSOSYNC_INCLUDE_GROUPS: !Ref IncludeGroups
-      Policies:
-        - Statement:
-            - Sid: SSMGetParameterPolicy
-              Effect: Allow
-              Action:
-                - "secretsmanager:Get*"
-              Resource:
-                - !Ref AWSGoogleCredentialsSecret
-                - !Ref AWSGoogleAdminEmail
-                - !Ref AWSSCIMEndpointSecret
-                - !Ref AWSSCIMAccessTokenSecret
-                - !Ref AWSRegionSecret
-                - !Ref AWSIdentityStoreIDSecret
-        - Version: '2012-10-17'
-          Statement:
-            - Sid: IdentityStoreAccesPolicy
-              Effect: Allow
-              Action:
-                - "identitystore:DeleteUser"
-                - "identitystore:CreateGroup"
-                - "identitystore:CreateGroupMembership"
-                - "identitystore:ListGroups"
-                - "identitystore:ListUsers"
-                - "identitystore:ListGroupMemberships"
-                - "identitystore:IsMemberInGroups"
-                - "identitystore:GetGroupMembershipId"
-                - "identitystore:DeleteGroupMembership"
-                - "identitystore:DeleteGroup"
-              Resource:
-                - "*"
+      Role: !GetAtt SSOSyncFunctionRole.Arn
       Events:
         SyncScheduledEvent:
           Type: Schedule
@@ -189,6 +164,62 @@ Resources:
             Schedule: !Ref ScheduleExpression
     Metadata:
       BuildMethod: makefile
+
+
+  SSOSyncFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "google-sso-sync"
+      Description: "Allows Lambda functions to call AWS services on your behalf."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSSSOMasterAccountAdministrator"
+      Policies:
+        - PolicyName: "SecretsRead"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SSMGetParameterPolicy
+                Effect: Allow
+                Action:
+                  - "secretsmanager:Get*"
+                Resource:
+                  - !Ref AWSGoogleCredentialsSecret
+                  - !Ref AWSGoogleAdminEmail
+                  - !Ref AWSGoogleSAEmail
+                  - !Ref AWSSCIMEndpointSecret
+                  - !Ref AWSSCIMAccessTokenSecret
+                  - !Ref AWSRegionSecret
+                  - !Ref AWSIdentityStoreIDSecret
+        - PolicyName: "IdentityStoreAccess"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: IdentityStoreAccesPolicy
+                Effect: Allow
+                Action:
+                  - "identitystore:DeleteUser"
+                  - "identitystore:CreateGroup"
+                  - "identitystore:CreateGroupMembership"
+                  - "identitystore:ListGroups"
+                  - "identitystore:ListUsers"
+                  - "identitystore:ListGroupMemberships"
+                  - "identitystore:IsMemberInGroups"
+                  - "identitystore:GetGroupMembershipId"
+                  - "identitystore:DeleteGroupMembership"
+                  - "identitystore:DeleteGroup"
+                Resource:
+                  - "*"
+
 
   AWSGoogleCredentialsSecret:
     Type: "AWS::SecretsManager::Secret"
@@ -201,6 +232,12 @@ Resources:
     Properties:
       Name: SSOSyncGoogleAdminEmail
       SecretString: !Ref GoogleAdminEmail
+
+  AWSGoogleSAEmail:
+    Type: "AWS::SecretsManager::Secret"
+    Properties:
+      Name: SSOSyncGoogleSAEmail
+      SecretString: !Ref GoogleSAEmail
 
   AWSSCIMEndpointSecret: # This can be moved to custom provider
     Type: "AWS::SecretsManager::Secret"
